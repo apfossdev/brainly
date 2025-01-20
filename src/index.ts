@@ -1,61 +1,100 @@
 import express from "express";
-import mongoose from "mongoose";
 import jwt from "jsonwebtoken";
-import { z } from "zod";
-import { UserModel } from "./db";
-import dotenv from "dotenv";
-//hash the password using bcrypt here by seeing previous files
-
-dotenv.config();
-
-mongoose.connect(process.env.MONGODB_URI as string);
+import { ContentModel, UserModel } from "./db";
+import { JWT_PASSWORD } from "./config";
+import { userMiddleware } from "./middleware";
 
 const app = express();
 app.use(express.json());
 
-const signupSchema = z.object({
-  username: z.string().min(3).max(10),
-  password: z
-    .string()
-    .min(8)
-    .max(20)
-    .regex(/(?=.*[a-z])/, "Must contain at least one lowercase letter")
-    .regex(/(?=.*[A-Z])/, "Must contain at least one uppercase letter")
-    .regex(/(?=.*\d)/, "Must contain at least one number")
-    .regex(/(?=.*[@$!%*?&])/, "Must contain at least one special character")
-});
-
 app.post("/api/v1/signup", async (req, res) => {
+  //todo: zod validation and hash the password
+  const username = req.body.username;
+  const password = req.body.password;
   try {
-    const { username, password } = signupSchema.parse(req.body);
+    await UserModel.create({
+      username,
+      password,
+    });
 
-    const existingUser = await UserModel.findOne({ username });
-    if(existingUser) {
-      return res.status(403).json({
-        message: "User already exists with this username"
-      });
-    }
-
-    await UserModel.create({ username, password });
-
-  }
-
-  catch (error) {
-    if( error instanceof z.ZodError) {
-      return res.status(411).json({message : "Error in inputs", errors: error.errors});
-    }
-    res.status(500).json({message: "Server error"});
+    res.json({
+      message: "User signed up",
+    });
+  } catch (e) {
+    res.status(411).json({
+      message: "User already exists",
+    });
   }
 });
 
-app.post("/api/v1/signin", (req, res) => {});
+app.post("/api/v1/signin", async (req, res) => {
+  const username = req.body.username;
+  const password = req.body.password;
+  const existingUser = await UserModel.findOne({
+    username,
+    password,
+  });
+  if (existingUser) {
+    const token = jwt.sign(
+      {
+        id: existingUser._id,
+      },
+      JWT_PASSWORD
+    );
+    res.json({
+      token,
+    });
+  } else {
+    res.status(403).json({
+      message: "Incorrect credentials",
+    });
+  }
+});
 
-app.post("/api/v1/content", (req, res) => {});
+app.post("/api/v1/content", userMiddleware, async (req, res) => {
+  const link = req.body.link;
+  const type = req.body.type;
+  await ContentModel.create({
+    link,
+    type,
+    //@ts-ignore
+    userId: req.userId,
+    tags: [],
+  });
 
-app.get("/api/v1/content", (req, res) => {});
+  res.json({
+    message: "Content added",
+  });
+});
 
-app.delete("/api/v1/content", (req, res) => {});
+app.get("/api/v1/content", userMiddleware, async (req, res) => {
+  //@ts-ignore
+  const userId = req.userId;
+  const content = await ContentModel.find({
+    userId : userId,
+  }).populate("userId", "username"); //foreign key relationships not enforced very well as mongodb wants us to be flexible
+  res.json({
+    content,
+  });
+});
 
-app.post("/api/v1/brain/share", (req, res) => {});
+app.delete("/api/v1/content", userMiddleware, async (req, res) => {
+  const contentId = req.body.contentId;
 
-app.get("/api/v1/brain/:shareLink", (req, res) => {});
+  await ContentModel.deleteMany({
+    contentId,
+    //@ts-ignore
+    userId: req.userId
+  })
+
+  res.json({
+    message: "Deleted"
+  })
+
+});
+
+// app.post("/api/v1/brain/share", (req, res) => {});
+
+// app.get("/api/v1/brain/:shareLink", (req, res) => {});
+
+app.listen(3000);
